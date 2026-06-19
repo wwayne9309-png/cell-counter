@@ -243,16 +243,12 @@ dropZone.addEventListener('drop', async e => {
 });
 folderInput.addEventListener('change', e => handleFiles(Array.from(e.target.files)));
 
-const ALLOWED = ['.jpg','.jpeg','.png','.bmp','.tif','.tiff'];
-
 function handleFiles(fileList) {
-  selectedFiles = Array.from(fileList).filter(f => {
-    const ext = f.name.slice(f.name.lastIndexOf('.')).toLowerCase();
-    return ALLOWED.includes(ext);
-  });
-  const total = fileList.length;
+  const all = Array.from(fileList);
+  // 只排除明顯的非圖片系統檔（.DS_Store 等），其他交給伺服器判斷
+  selectedFiles = all.filter(f => !f.name.startsWith('.') && f.size > 0);
   document.getElementById('file-count').textContent =
-    `已選 ${selectedFiles.length} 張圖片（共 ${total} 個檔案）`;
+    `已選 ${selectedFiles.length} 張圖片（共 ${all.length} 個檔案）`;
   document.getElementById('run-btn').disabled = selectedFiles.length === 0;
 }
 
