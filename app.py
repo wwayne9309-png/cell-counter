@@ -157,7 +157,7 @@ HTML = """<!DOCTYPE html>
 <p class="subtitle">選擇包含顯微鏡影像的資料夾，自動計算每張圖的細胞數</p>
 
 <div class="drop-zone" id="drop-zone" onclick="document.getElementById('folder-input').click()">
-  <input type="file" id="folder-input" webkitdirectory multiple accept="image/*">
+  <input type="file" id="folder-input" webkitdirectory multiple>
   <div class="icon">📂</div>
   <p><strong>點此選擇資料夾</strong>，或將資料夾拖放至此</p>
   <p style="margin-top:8px; font-size:0.8rem;">支援 JPG、PNG、BMP、TIF</p>
