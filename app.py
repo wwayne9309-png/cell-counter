@@ -204,7 +204,7 @@ HTML = """<!DOCTYPE html>
 <div class="params">
   <div class="param-group">
     <label>對比閾值（越大越嚴格）</label>
-    <input type="number" id="contrast" value="12" min="1" max="100">
+    <input type="number" id="contrast" value="36" min="1" max="100">
   </div>
   <div class="param-group">
     <label>最小細胞面積（px²）</label>
@@ -418,7 +418,7 @@ def analyze():
     if not file:
         return jsonify({"error": "no file"}), 400
 
-    contrast = int(request.form.get("contrast", 12))
+    contrast = int(request.form.get("contrast", 36))
     min_area = int(request.form.get("min_area", 65))
     max_area = int(request.form.get("max_area", 3000))
     split_adjacent = request.form.get("split_adjacent", "1") == "1"
