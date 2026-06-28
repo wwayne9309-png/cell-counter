@@ -383,9 +383,9 @@ function appendRow(name, count, preview) {
 }
 
 function exportCSV() {
-  let csv = '檔名,細胞數\n';
-  results.forEach(r => { csv += `"${r.name}",${r.count ?? ''}\n`; });
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  let csv = '\\u{FEFF}檔名,細胞數\\n';
+  results.forEach(r => { csv += `"${r.name}",${r.count ?? ''}\\n`; });
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'cell_counts.csv';
