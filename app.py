@@ -187,11 +187,16 @@ HTML = """<!DOCTYPE html>
 <h1>細胞計數工具</h1>
 <p class="subtitle">選擇包含顯微鏡影像的資料夾，自動計算每張圖的細胞數</p>
 
-<div class="drop-zone" id="drop-zone" onclick="document.getElementById('folder-input').click()">
-  <input type="file" id="folder-input" webkitdirectory multiple>
+<div class="drop-zone" id="drop-zone">
+  <input type="file" id="folder-input" webkitdirectory multiple style="display:none">
+  <input type="file" id="file-input" multiple accept="image/*,.bmp,.tif,.tiff" style="display:none">
   <div class="icon">📂</div>
-  <p><strong>點此選擇資料夾</strong>，或將資料夾拖放至此</p>
-  <p style="margin-top:8px; font-size:0.8rem;">支援 JPG、PNG、BMP、TIF</p>
+  <p>
+    <strong style="cursor:pointer" onclick="document.getElementById('folder-input').click()">選擇資料夾</strong>
+    &nbsp;或&nbsp;
+    <strong style="cursor:pointer" onclick="document.getElementById('file-input').click()">選擇圖片</strong>
+  </p>
+  <p style="margin-top:8px; font-size:0.8rem;">也可直接將資料夾或圖片拖放至此 · 支援 JPG、PNG、BMP、TIF</p>
 </div>
 
 <div class="params">
@@ -249,35 +254,47 @@ let results = [];
 
 const dropZone = document.getElementById('drop-zone');
 const folderInput = document.getElementById('folder-input');
+const fileInput = document.getElementById('file-input');
 
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
 dropZone.addEventListener('drop', async e => {
   e.preventDefault();
   dropZone.classList.remove('over');
+
   const items = e.dataTransfer.items;
-  if (!items) return;
   const files = [];
-  const readEntry = (entry) => new Promise(resolve => {
-    if (entry.isFile) {
-      entry.file(f => { files.push(f); resolve(); });
-    } else if (entry.isDirectory) {
-      const reader = entry.createReader();
-      const readAll = () => reader.readEntries(async entries => {
-        if (!entries.length) return resolve();
-        await Promise.all(entries.map(readEntry));
+
+  // 優先用 webkitGetAsEntry（支援拖曳資料夾）
+  if (items && items.length > 0 && items[0].webkitGetAsEntry) {
+    const readEntry = (entry) => new Promise(resolve => {
+      if (entry.isFile) {
+        entry.file(f => { files.push(f); resolve(); });
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const readAll = () => reader.readEntries(async entries => {
+          if (!entries.length) return resolve();
+          await Promise.all(entries.map(readEntry));
+          readAll();
+        });
         readAll();
-      });
-      readAll();
-    } else resolve();
-  });
-  await Promise.all(Array.from(items).map(item => {
-    const entry = item.webkitGetAsEntry?.();
-    return entry ? readEntry(entry) : Promise.resolve();
-  }));
+      } else resolve();
+    });
+    await Promise.all(Array.from(items).map(item => {
+      const entry = item.webkitGetAsEntry?.();
+      return entry ? readEntry(entry) : Promise.resolve();
+    }));
+  }
+
+  // Fallback：直接讀 dataTransfer.files（個別圖片拖曳）
+  if (files.length === 0 && e.dataTransfer.files.length > 0) {
+    files.push(...Array.from(e.dataTransfer.files));
+  }
+
   handleFiles(files);
 });
 folderInput.addEventListener('change', e => handleFiles(Array.from(e.target.files)));
+fileInput.addEventListener('change', e => handleFiles(Array.from(e.target.files)));
 
 function handleFiles(fileList) {
   const all = Array.from(fileList);
