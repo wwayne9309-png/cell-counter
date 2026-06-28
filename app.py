@@ -1,26 +1,20 @@
 """
 細胞計數網頁應用
-使用舊算法（背景相減 + 連通區域計數）
+演算法：背景相減法 + 亮度/面積雙條件過濾 + 亮度 NMS 相鄰細胞分裂
 """
 
 import os
-import io
-import csv
 import base64
-import tempfile
-import threading
 
 import cv2
 import numpy as np
-from flask import Flask, request, jsonify, send_file
-from flask import render_template_string
+from flask import Flask, request, jsonify, render_template_string
 
 app = Flask(__name__)
 
-ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
-
-def count_cells_old(img_bytes: bytes, contrast_threshold=12, min_area=80, max_area=3000, bg_blur=101):
+def count_cells(img_bytes: bytes, contrast_threshold=12, min_area=65,
+                max_area=3000, bg_blur=101, split_adjacent=True):
     nparr = np.frombuffer(img_bytes, np.uint8)
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     if img is None:
@@ -36,24 +30,59 @@ def count_cells_old(img_bytes: bytes, contrast_threshold=12, min_area=80, max_ar
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
 
-    num_labels, _, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    valid_cells = [
-        (centroids[i], stats[i, cv2.CC_STAT_AREA])
-        for i in range(1, num_labels)
-        if min_area <= stats[i, cv2.CC_STAT_AREA] <= max_area
-    ]
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(binary, connectivity=8)
 
+    min_peak = 95
+    split_threshold = max(2.5 * min_area, 200.0)
+    lc_smooth = cv2.GaussianBlur(local_contrast.astype(np.float32), (5, 5), 1.5)
+
+    def nms_in_blob(blob_mask):
+        candidates = np.argwhere(blob_mask & (lc_smooth > 50))
+        if len(candidates) == 0:
+            return []
+        brightnesses = lc_smooth[candidates[:, 0], candidates[:, 1]]
+        order = np.argsort(-brightnesses)
+        candidates = candidates[order]
+        suppressed = np.zeros(lc_smooth.shape, dtype=bool)
+        peaks = []
+        for r, c in candidates:
+            if suppressed[r, c]:
+                continue
+            peaks.append((float(c), float(r)))
+            suppressed[max(0, r-7):r+8, max(0, c-7):c+8] = True
+        return peaks
+
+    valid_cells = []
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if not (20 <= area <= max_area):
+            continue
+        blob_mask = (labels == i)
+        peak = int(local_contrast[blob_mask].max())
+        if not (peak >= min_peak or area >= min_area):
+            continue
+
+        centroid = (float(centroids[i][0]), float(centroids[i][1]))
+
+        if split_adjacent and area > split_threshold:
+            nms_peaks = nms_in_blob(blob_mask)
+            if len(nms_peaks) >= 2:
+                for pos in nms_peaks:
+                    valid_cells.append((pos, area // max(1, len(nms_peaks))))
+                continue
+        valid_cells.append((centroid, area))
+
+    count = len(valid_cells)
     annotated = img.copy()
     for (cx, cy), area in valid_cells:
         r = max(8, int(np.sqrt(area / np.pi)))
         cv2.circle(annotated, (int(cx), int(cy)), r, (0, 255, 0), 2)
-    cv2.putText(annotated, f"Count: {len(valid_cells)}", (20, 70),
+    cv2.putText(annotated, f"Count: {count}", (20, 70),
                 cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 255, 0), 3)
 
     _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
     preview_b64 = base64.b64encode(buf.tobytes()).decode()
-
-    return len(valid_cells), preview_b64
+    return count, preview_b64
 
 
 HTML = """<!DOCTYPE html>
@@ -85,13 +114,16 @@ HTML = """<!DOCTYPE html>
   .drop-zone p { color: #8b949e; font-size: 0.95rem; }
   .drop-zone strong { color: #58a6ff; }
 
-  .params { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  .params { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; align-items: flex-end; }
   .param-group { display: flex; flex-direction: column; gap: 4px; }
   .param-group label { font-size: 0.8rem; color: #8b949e; }
-  .param-group input {
+  .param-group input[type="number"] {
     background: #161b22; border: 1px solid #334; border-radius: 6px;
     color: #e0e0e0; padding: 6px 10px; width: 100px; font-size: 0.9rem;
   }
+  .toggle-group { display: flex; align-items: center; gap: 8px; padding-bottom: 2px; }
+  .toggle-group label { font-size: 0.85rem; color: #8b949e; cursor: pointer; }
+  .toggle-group input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: #238636; }
 
   .btn {
     background: #238636; color: #fff; border: none; border-radius: 8px;
@@ -138,7 +170,6 @@ HTML = """<!DOCTYPE html>
   .thumb:hover { opacity: 0.8; }
   #result-section { display: none; }
 
-  /* 燈箱 */
   #lightbox {
     display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.85);
     z-index: 999; align-items: center; justify-content: center;
@@ -166,15 +197,22 @@ HTML = """<!DOCTYPE html>
 <div class="params">
   <div class="param-group">
     <label>對比閾值（越大越嚴格）</label>
-    <input type="number" id="contrast" value="12" min="1" max="50">
+    <input type="number" id="contrast" value="12" min="1" max="100">
   </div>
   <div class="param-group">
-    <label>最小細胞面積（px）</label>
-    <input type="number" id="min-area" value="80" min="1">
+    <label>最小細胞面積（px²）</label>
+    <input type="number" id="min-area" value="65" min="1">
   </div>
   <div class="param-group">
-    <label>最大細胞面積（px）</label>
+    <label>最大細胞面積（px²）</label>
     <input type="number" id="max-area" value="3000" min="1">
+  </div>
+  <div class="param-group">
+    <label>&nbsp;</label>
+    <div class="toggle-group">
+      <input type="checkbox" id="split-toggle" checked>
+      <label for="split-toggle">自動分裂相鄰細胞</label>
+    </div>
   </div>
 </div>
 
@@ -217,8 +255,6 @@ dropZone.addEventListener('dragleave', () => dropZone.classList.remove('over'));
 dropZone.addEventListener('drop', async e => {
   e.preventDefault();
   dropZone.classList.remove('over');
-
-  // 用 DataTransferItem API 遞迴讀取資料夾內容
   const items = e.dataTransfer.items;
   if (!items) return;
   const files = [];
@@ -245,7 +281,6 @@ folderInput.addEventListener('change', e => handleFiles(Array.from(e.target.file
 
 function handleFiles(fileList) {
   const all = Array.from(fileList);
-  // 只排除明顯的非圖片系統檔（.DS_Store 等），其他交給伺服器判斷
   selectedFiles = all.filter(f => !f.name.startsWith('.') && f.size > 0);
   document.getElementById('file-count').textContent =
     `已選 ${selectedFiles.length} 張圖片（共 ${all.length} 個檔案）`;
@@ -271,6 +306,7 @@ async function runAnalysis() {
   const contrast = document.getElementById('contrast').value;
   const minArea = document.getElementById('min-area').value;
   const maxArea = document.getElementById('max-area').value;
+  const splitAdjacent = document.getElementById('split-toggle').checked;
 
   let done = 0;
   for (const file of selectedFiles) {
@@ -282,6 +318,7 @@ async function runAnalysis() {
     formData.append('contrast', contrast);
     formData.append('min_area', minArea);
     formData.append('max_area', maxArea);
+    formData.append('split_adjacent', splitAdjacent ? '1' : '0');
 
     try {
       const res = await fetch('/analyze', { method: 'POST', body: formData });
@@ -323,9 +360,9 @@ function appendRow(name, count, preview) {
 }
 
 function exportCSV() {
-  let csv = '檔名,細胞數\\n';
-  results.forEach(r => { csv += `"${r.name}",${r.count ?? ''}\\n`; });
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  let csv = '檔名,細胞數\n';
+  results.forEach(r => { csv += `"${r.name}",${r.count ?? ''}\n`; });
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'cell_counts.csv';
@@ -359,12 +396,14 @@ def analyze():
         return jsonify({"error": "no file"}), 400
 
     contrast = int(request.form.get("contrast", 12))
-    min_area = int(request.form.get("min_area", 80))
+    min_area = int(request.form.get("min_area", 65))
     max_area = int(request.form.get("max_area", 3000))
+    split_adjacent = request.form.get("split_adjacent", "1") == "1"
 
     img_bytes = file.read()
-    count, preview = count_cells_old(img_bytes, contrast_threshold=contrast,
-                                     min_area=min_area, max_area=max_area)
+    count, preview = count_cells(img_bytes, contrast_threshold=contrast,
+                                 min_area=min_area, max_area=max_area,
+                                 split_adjacent=split_adjacent)
     if count is None:
         return jsonify({"error": "無法讀取圖片"}), 400
 
