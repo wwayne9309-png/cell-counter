@@ -252,6 +252,10 @@ HTML = """<!DOCTYPE html>
 let selectedFiles = [];
 let results = [];
 
+// 防止瀏覽器把拖進來的檔案直接開啟
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => e.preventDefault());
+
 const dropZone = document.getElementById('drop-zone');
 const folderInput = document.getElementById('folder-input');
 const fileInput = document.getElementById('file-input');
